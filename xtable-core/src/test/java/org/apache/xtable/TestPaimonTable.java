@@ -71,7 +71,19 @@ public class TestPaimonTable implements GenericTable<GenericRow, String> {
       Configuration hadoopConf,
       boolean additionalColumns) {
 
-    Schema schema = buildGenericSchema(partitionField, additionalColumns);
+    Schema schema = buildGenericSchema(partitionField, additionalColumns, false);
+    return createTable(tableName, partitionField, tempDir, hadoopConf, additionalColumns, schema);
+  }
+
+  public static GenericTable<GenericRow, String> createTable(
+      String tableName,
+      String partitionField,
+      Path tempDir,
+      Configuration hadoopConf,
+      boolean additionalColumns,
+      boolean enableChangelog) {
+
+    Schema schema = buildGenericSchema(partitionField, additionalColumns, enableChangelog);
     return createTable(tableName, partitionField, tempDir, hadoopConf, additionalColumns, schema);
   }
 
@@ -113,7 +125,8 @@ public class TestPaimonTable implements GenericTable<GenericRow, String> {
     }
   }
 
-  private static Schema buildGenericSchema(String partitionField, boolean additionalColumns) {
+  private static Schema buildGenericSchema(
+      String partitionField, boolean additionalColumns, boolean enableChangelog) {
     Schema.Builder builder =
         Schema.newBuilder()
             .primaryKey("id")
@@ -128,6 +141,10 @@ public class TestPaimonTable implements GenericTable<GenericRow, String> {
             .option("bucket-key", "id")
             .option("full-compaction.delta-commits", "1")
             .option("metadata.stats-mode", "full");
+
+    if (enableChangelog) {
+      builder.option("changelog-producer", "input");
+    }
 
     if (partitionField != null) {
       builder

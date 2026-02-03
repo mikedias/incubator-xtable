@@ -28,6 +28,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Properties;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -45,6 +46,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import org.apache.xtable.GenericTable;
 import org.apache.xtable.TestPaimonTable;
+import org.apache.xtable.model.InternalSnapshot;
 import org.apache.xtable.model.schema.InternalSchema;
 import org.apache.xtable.model.stat.ColumnStat;
 import org.apache.xtable.model.stat.Range;
@@ -52,8 +54,17 @@ import org.apache.xtable.model.storage.InternalDataFile;
 
 @Log4j2
 public class TestPaimonStatsExtractor {
-  private static final PaimonDataFileExtractor extractor = PaimonDataFileExtractor.getInstance();
   private static final PaimonSchemaExtractor schemaExtractor = PaimonSchemaExtractor.getInstance();
+
+  private static InternalDataFile firstDataFile(FileStoreTable table) {
+    PaimonConversionSource source =
+        new PaimonConversionSource(table, PaimonSourceConfig.fromProperties(new Properties()));
+    InternalSnapshot snapshot = source.getCurrentSnapshot();
+    return snapshot.getPartitionedDataFiles().stream()
+        .flatMap(g -> g.getDataFiles().stream())
+        .findFirst()
+        .get();
+  }
 
   @TempDir private Path tempDir;
   private TestPaimonTable testTable;
@@ -66,12 +77,7 @@ public class TestPaimonStatsExtractor {
 
     List<GenericRow> rows = testTable.insertRows(10);
 
-    List<InternalDataFile> result =
-        extractor.toInternalDataFiles(
-            paimonTable, paimonTable.snapshotManager().latestSnapshot(), schema);
-
-    assertFalse(result.isEmpty());
-    InternalDataFile dataFile = result.get(0);
+    InternalDataFile dataFile = firstDataFile(paimonTable);
     List<ColumnStat> stats = dataFile.getColumnStats();
     assertFalse(stats.isEmpty());
 
@@ -138,12 +144,7 @@ public class TestPaimonStatsExtractor {
 
     testTable.insertRows(10);
 
-    List<InternalDataFile> result =
-        extractor.toInternalDataFiles(
-            paimonTable, paimonTable.snapshotManager().latestSnapshot(), schema);
-
-    assertFalse(result.isEmpty());
-    InternalDataFile dataFile = result.get(0);
+    InternalDataFile dataFile = firstDataFile(paimonTable);
     List<ColumnStat> stats = dataFile.getColumnStats();
     assertFalse(stats.isEmpty());
 
@@ -203,11 +204,7 @@ public class TestPaimonStatsExtractor {
             GenericRow.of(2, millisTwo, microsTwo, nanosTwo)));
 
     InternalSchema internalSchema = schemaExtractor.toInternalSchema(table.schema());
-    List<ColumnStat> stats =
-        extractor
-            .toInternalDataFiles(table, table.snapshotManager().latestSnapshot(), internalSchema)
-            .get(0)
-            .getColumnStats();
+    List<ColumnStat> stats = firstDataFile(table).getColumnStats();
 
     Range millisRange = getColumnStat(stats, "ts_millis").getRange();
     assertEquals(Range.vector(millisOne.getMillisecond(), millisTwo.getMillisecond()), millisRange);
@@ -265,11 +262,7 @@ public class TestPaimonStatsExtractor {
     TestPaimonTable.writeRows(table, Arrays.asList(row1, row2, row3));
 
     InternalSchema internalSchema = schemaExtractor.toInternalSchema(table.schema());
-    List<ColumnStat> stats =
-        extractor
-            .toInternalDataFiles(table, table.snapshotManager().latestSnapshot(), internalSchema)
-            .get(0)
-            .getColumnStats();
+    List<ColumnStat> stats = firstDataFile(table).getColumnStats();
 
     ColumnStat priceStat = getColumnStat(stats, "price");
     assertEquals(
@@ -338,11 +331,7 @@ public class TestPaimonStatsExtractor {
     TestPaimonTable.writeRows(table, Arrays.asList(row1, row2, row3));
 
     InternalSchema internalSchema = schemaExtractor.toInternalSchema(table.schema());
-    List<ColumnStat> stats =
-        extractor
-            .toInternalDataFiles(table, table.snapshotManager().latestSnapshot(), internalSchema)
-            .get(0)
-            .getColumnStats();
+    List<ColumnStat> stats = firstDataFile(table).getColumnStats();
 
     ColumnStat idStat = getColumnStat(stats, "id");
     assertEquals(Range.vector(1, 3), idStat.getRange());
@@ -391,11 +380,7 @@ public class TestPaimonStatsExtractor {
     TestPaimonTable.writeRows(table, Arrays.asList(row1, row2, row3));
 
     InternalSchema internalSchema = schemaExtractor.toInternalSchema(table.schema());
-    List<ColumnStat> stats =
-        extractor
-            .toInternalDataFiles(table, table.snapshotManager().latestSnapshot(), internalSchema)
-            .get(0)
-            .getColumnStats();
+    List<ColumnStat> stats = firstDataFile(table).getColumnStats();
 
     assertEquals(0, stats.size());
   }
@@ -444,11 +429,7 @@ public class TestPaimonStatsExtractor {
     TestPaimonTable.writeRows(table, Arrays.asList(row1, row2, row3));
 
     InternalSchema internalSchema = schemaExtractor.toInternalSchema(table.schema());
-    List<ColumnStat> stats =
-        extractor
-            .toInternalDataFiles(table, table.snapshotManager().latestSnapshot(), internalSchema)
-            .get(0)
-            .getColumnStats();
+    List<ColumnStat> stats = firstDataFile(table).getColumnStats();
 
     // compaction create commits that are DELETE and ADD on the same file
     // with `manifest.delete-file-drop-stats` enabled, this means stats are empty after compaction
@@ -495,11 +476,7 @@ public class TestPaimonStatsExtractor {
     TestPaimonTable.writeRows(table, Arrays.asList(row1, row2, row3));
 
     InternalSchema internalSchema = schemaExtractor.toInternalSchema(table.schema());
-    List<ColumnStat> stats =
-        extractor
-            .toInternalDataFiles(table, table.snapshotManager().latestSnapshot(), internalSchema)
-            .get(0)
-            .getColumnStats();
+    List<ColumnStat> stats = firstDataFile(table).getColumnStats();
 
     // only the id column has stats, nested fields and array fields do not have stats
     assertEquals(1, stats.size());

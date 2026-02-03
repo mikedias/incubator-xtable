@@ -29,6 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
+import java.util.Properties;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.paimon.Snapshot;
@@ -65,7 +66,9 @@ public class TestPaimonConversionSource {
         ((TestPaimonTable)
             TestPaimonTable.createTable("test_table", "level", tempDir, hadoopConf, false));
     paimonTable = testTable.getPaimonTable();
-    conversionSource = new PaimonConversionSource(paimonTable);
+    conversionSource =
+        new PaimonConversionSource(
+            paimonTable, PaimonSourceConfig.fromProperties(new Properties()));
   }
 
   @Test
@@ -96,7 +99,8 @@ public class TestPaimonConversionSource {
     FileStoreTable unpartitionedPaimonTable =
         ((TestPaimonTable) unpartitionedTable).getPaimonTable();
     PaimonConversionSource unpartitionedSource =
-        new PaimonConversionSource(unpartitionedPaimonTable);
+        new PaimonConversionSource(
+            unpartitionedPaimonTable, PaimonSourceConfig.fromProperties(new Properties()));
 
     unpartitionedTable.insertRows(3);
 
@@ -135,7 +139,9 @@ public class TestPaimonConversionSource {
     GenericTable<?, String> emptyTable =
         TestPaimonTable.createTable("empty_table", "level", tempDir, hadoopConf, false);
     FileStoreTable emptyPaimonTable = ((TestPaimonTable) emptyTable).getPaimonTable();
-    PaimonConversionSource emptySource = new PaimonConversionSource(emptyPaimonTable);
+    PaimonConversionSource emptySource =
+        new PaimonConversionSource(
+            emptyPaimonTable, PaimonSourceConfig.fromProperties(new Properties()));
 
     ReadException exception = assertThrows(ReadException.class, emptySource::getCurrentTable);
 
@@ -165,7 +171,9 @@ public class TestPaimonConversionSource {
     GenericTable<?, String> emptyTable =
         TestPaimonTable.createTable("empty_table2", "level", tempDir, hadoopConf, false);
     FileStoreTable emptyPaimonTable = ((TestPaimonTable) emptyTable).getPaimonTable();
-    PaimonConversionSource emptySource = new PaimonConversionSource(emptyPaimonTable);
+    PaimonConversionSource emptySource =
+        new PaimonConversionSource(
+            emptyPaimonTable, PaimonSourceConfig.fromProperties(new Properties()));
 
     ReadException exception = assertThrows(ReadException.class, emptySource::getCurrentSnapshot);
 
@@ -345,7 +353,9 @@ public class TestPaimonConversionSource {
         TestPaimonTable.createTable("table_with_extra", "level", tempDir, hadoopConf, true);
     FileStoreTable extraColumnsPaimonTable =
         ((TestPaimonTable) tableWithExtraColumns).getPaimonTable();
-    PaimonConversionSource extraColumnsSource = new PaimonConversionSource(extraColumnsPaimonTable);
+    PaimonConversionSource extraColumnsSource =
+        new PaimonConversionSource(
+            extraColumnsPaimonTable, PaimonSourceConfig.fromProperties(new Properties()));
 
     tableWithExtraColumns.insertRows(2);
 

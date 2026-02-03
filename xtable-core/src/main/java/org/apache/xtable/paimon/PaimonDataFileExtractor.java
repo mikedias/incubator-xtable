@@ -18,6 +18,8 @@
  
 package org.apache.xtable.paimon;
 
+import static org.apache.xtable.paimon.PaimonSourceConfig.PaimonEmitFilesMode.CHANGELOG;
+
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -34,7 +36,6 @@ import org.apache.paimon.manifest.ManifestFile;
 import org.apache.paimon.manifest.ManifestFileMeta;
 import org.apache.paimon.manifest.ManifestList;
 import org.apache.paimon.table.FileStoreTable;
-import org.apache.paimon.table.source.snapshot.SnapshotReader;
 
 import org.apache.xtable.model.schema.InternalSchema;
 import org.apache.xtable.model.storage.InternalDataFile;
@@ -55,10 +56,13 @@ public class PaimonDataFileExtractor {
   }
 
   public List<InternalDataFile> toInternalDataFiles(
-      FileStoreTable table, Snapshot snapshot, InternalSchema internalSchema) {
+      FileStoreTable table,
+      Snapshot snapshot,
+      InternalSchema internalSchema,
+      PaimonSourceConfig sourceConfig) {
     List<InternalDataFile> result = new ArrayList<>();
     Iterator<ManifestEntry> manifestEntryIterator =
-        newSnapshotReader(table, snapshot).readFileIterator();
+        manifestEntryIterator(table, snapshot, sourceConfig);
     while (manifestEntryIterator.hasNext()) {
       result.add(toInternalDataFile(table, manifestEntryIterator.next(), internalSchema));
     }
@@ -154,16 +158,71 @@ public class PaimonDataFileExtractor {
     return InternalFilesDiff.builder().filesAdded(addedFiles).filesRemoved(removedFiles).build();
   }
 
-  private SnapshotReader newSnapshotReader(FileStoreTable table, Snapshot snapshot) {
-    // If the table has primary keys, we read only the top level files
-    // which means we can only consider fully compacted files.
-    if (!table.schema().primaryKeys().isEmpty()) {
+  private Iterator<ManifestEntry> manifestEntryIterator(
+      FileStoreTable table, Snapshot snapshot, PaimonSourceConfig sourceConfig) {
+    if (sourceConfig.getEmitFilesMode().equals(CHANGELOG)) {
+      return readAllChangelogEntries(table, snapshot);
+    } else if (!table.schema().primaryKeys().isEmpty()) {
+      // If the table has primary keys, we read only the top level files
+      // which means we can only consider fully compacted files.
       return table
           .newSnapshotReader()
+          .withSnapshot(snapshot)
           .withLevel(table.coreOptions().numLevels() - 1)
-          .withSnapshot(snapshot);
+          .readFileIterator();
     } else {
-      return table.newSnapshotReader().withSnapshot(snapshot);
+      return table.newSnapshotReader().withSnapshot(snapshot).readFileIterator();
     }
+  }
+
+  /**
+   * Reads all changelog entries from all snapshots up to and including the given snapshot. This
+   * method iterates through all snapshots and collects changelog manifests from those that have
+   * them (typically APPEND snapshots), regardless of compaction.
+   *
+   * @param table the Paimon table
+   * @param upToSnapshot the snapshot up to which to read changelogs
+   * @return Iterator of ManifestEntry containing all changelog entries
+   */
+  private Iterator<ManifestEntry> readAllChangelogEntries(
+      FileStoreTable table, Snapshot upToSnapshot) {
+    ManifestList manifestList = table.store().manifestListFactory().create();
+    ManifestFile manifestFile = table.store().manifestFileFactory().create();
+
+    List<ManifestEntry> allChangelogEntries = new ArrayList<>();
+
+    try {
+      // Iterate through all snapshots up to the given snapshot
+      Iterator<Snapshot> snapshotIterator = table.snapshotManager().snapshots();
+      while (snapshotIterator.hasNext()) {
+        Snapshot snapshot = snapshotIterator.next();
+
+        // Only process snapshots up to the requested snapshot
+        if (snapshot.id() > upToSnapshot.id()) {
+          break;
+        }
+
+        // Check if this snapshot has changelog manifests
+        if (snapshot.changelogManifestList() != null) {
+          List<ManifestFileMeta> changelogManifests = manifestList.readChangelogManifests(snapshot);
+          log.debug(
+              "Snapshot {} has {} changelog manifests", snapshot.id(), changelogManifests.size());
+
+          for (ManifestFileMeta manifestMeta : changelogManifests) {
+            List<ManifestEntry> entries = manifestFile.read(manifestMeta.fileName());
+            allChangelogEntries.addAll(entries);
+          }
+        }
+      }
+    } catch (Exception e) {
+      log.error("Failed to read changelog entries", e);
+      throw new RuntimeException("Failed to read changelog entries from Paimon table", e);
+    }
+
+    log.info(
+        "Read {} total changelog entries up to snapshot {}",
+        allChangelogEntries.size(),
+        upToSnapshot.id());
+    return allChangelogEntries.iterator();
   }
 }

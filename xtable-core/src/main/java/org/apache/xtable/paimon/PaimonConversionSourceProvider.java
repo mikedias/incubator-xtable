@@ -19,6 +19,7 @@
 package org.apache.xtable.paimon;
 
 import java.io.IOException;
+import java.util.Properties;
 
 import org.apache.paimon.Snapshot;
 import org.apache.paimon.catalog.CatalogContext;
@@ -44,7 +45,11 @@ public class PaimonConversionSourceProvider extends ConversionSourceProvider<Sna
       FileIO fileIO = FileIO.get(path, context);
       FileStoreTable paimonTable = FileStoreTableFactory.create(fileIO, path);
 
-      return new PaimonConversionSource(paimonTable);
+      PaimonSourceConfig paimonSourceConfig =
+          PaimonSourceConfig.fromProperties(sourceTableConfig.getAdditionalProperties());
+
+      return new PaimonConversionSource(
+          paimonTable, PaimonSourceConfig.fromProperties(new Properties()));
     } catch (IOException e) {
       throw new ReadException("Failed to read Paimon table from file system", e);
     }

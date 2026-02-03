@@ -18,12 +18,15 @@
  
 package org.apache.xtable.paimon;
 
+import static org.apache.xtable.paimon.PaimonSourceConfig.PaimonEmitFilesMode.CHANGELOG;
+
 import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Properties;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -55,11 +58,17 @@ public class PaimonConversionSource implements ConversionSource<Snapshot> {
   private final PaimonSchemaExtractor schemaExtractor = PaimonSchemaExtractor.getInstance();
   private final PaimonPartitionExtractor partitionSpecExtractor =
       PaimonPartitionExtractor.getInstance();
+  private final PaimonSourceConfig sourceConfig;
 
   public PaimonConversionSource(FileStoreTable paimonTable) {
+    this(paimonTable, PaimonSourceConfig.fromProperties(new Properties()));
+  }
+
+  public PaimonConversionSource(FileStoreTable paimonTable, PaimonSourceConfig paimonSourceConfig) {
     this.paimonTable = paimonTable;
     this.schemaManager = paimonTable.schemaManager();
     this.snapshotManager = paimonTable.snapshotManager();
+    this.sourceConfig = paimonSourceConfig;
   }
 
   @Override
@@ -95,7 +104,7 @@ public class PaimonConversionSource implements ConversionSource<Snapshot> {
     InternalTable internalTable = getTable(snapshot);
     InternalSchema internalSchema = internalTable.getReadSchema();
     List<InternalDataFile> dataFiles =
-        dataFileExtractor.toInternalDataFiles(paimonTable, snapshot, internalSchema);
+        dataFileExtractor.toInternalDataFiles(paimonTable, snapshot, internalSchema, sourceConfig);
 
     return InternalSnapshot.builder()
         .table(internalTable)
@@ -171,6 +180,10 @@ public class PaimonConversionSource implements ConversionSource<Snapshot> {
 
   @Override
   public boolean isIncrementalSyncSafeFrom(Instant instant) {
+    if (sourceConfig.getEmitFilesMode().equals(CHANGELOG)) {
+      return false; // Paimon doesn't store changelog deltas yet
+    }
+
     long timeInMillis = instant.toEpochMilli();
 
     Long earliestSnapshotId = snapshotManager.earliestSnapshotId();

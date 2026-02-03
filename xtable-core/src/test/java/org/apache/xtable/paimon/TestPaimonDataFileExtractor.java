@@ -25,10 +25,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Properties;
 import java.util.stream.Collectors;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.paimon.Snapshot;
+import org.apache.paimon.data.GenericRow;
 import org.apache.paimon.table.FileStoreTable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -45,6 +47,7 @@ public class TestPaimonDataFileExtractor {
   @TempDir private Path tempDir;
   private TestPaimonTable testTable;
   private FileStoreTable paimonTable;
+  private PaimonSourceConfig sourceConfig = PaimonSourceConfig.fromProperties(new Properties());
 
   @Test
   void testToInternalDataFilesWithUnpartitionedTable() {
@@ -57,7 +60,7 @@ public class TestPaimonDataFileExtractor {
 
     List<InternalDataFile> result =
         extractor.toInternalDataFiles(
-            paimonTable, paimonTable.snapshotManager().latestSnapshot(), schema);
+            paimonTable, paimonTable.snapshotManager().latestSnapshot(), schema, sourceConfig);
 
     assertNotNull(result);
     assertFalse(result.isEmpty());
@@ -87,7 +90,7 @@ public class TestPaimonDataFileExtractor {
 
     List<InternalDataFile> result =
         extractor.toInternalDataFiles(
-            paimonTable, paimonTable.snapshotManager().latestSnapshot(), schema);
+            paimonTable, paimonTable.snapshotManager().latestSnapshot(), schema, sourceConfig);
 
     assertNotNull(result);
     assertFalse(result.isEmpty());
@@ -109,7 +112,7 @@ public class TestPaimonDataFileExtractor {
 
   @Test
   void testToInternalDataFilesWithTableWithPrimaryKeys() {
-    createTableWithPrimaryKeys();
+    createUnpartitionedTable();
     InternalSchema schema = schemaExtractor.toInternalSchema(testTable.getPaimonTable().schema());
 
     // Insert some data to create files
@@ -118,7 +121,7 @@ public class TestPaimonDataFileExtractor {
     // Get the latest snapshot
     List<InternalDataFile> result =
         extractor.toInternalDataFiles(
-            paimonTable, paimonTable.snapshotManager().latestSnapshot(), schema);
+            paimonTable, paimonTable.snapshotManager().latestSnapshot(), schema, sourceConfig);
 
     assertNotNull(result);
     assertFalse(result.isEmpty());
@@ -146,7 +149,7 @@ public class TestPaimonDataFileExtractor {
 
     List<InternalDataFile> result =
         extractor.toInternalDataFiles(
-            paimonTable, paimonTable.snapshotManager().latestSnapshot(), schema);
+            paimonTable, paimonTable.snapshotManager().latestSnapshot(), schema, sourceConfig);
 
     assertFalse(result.isEmpty());
 
@@ -214,7 +217,7 @@ public class TestPaimonDataFileExtractor {
 
   @Test
   void testExtractFilesDiffWithTableWithPrimaryKeys() {
-    createTableWithPrimaryKeys();
+    createUnpartitionedTable();
     InternalSchema schema = schemaExtractor.toInternalSchema(testTable.getPaimonTable().schema());
 
     // Insert initial data
@@ -253,6 +256,104 @@ public class TestPaimonDataFileExtractor {
     assertEquals(0, filesDiff.getFilesRemoved().size());
   }
 
+  @Test
+  void testToInternalDataFilesWithChangelogMode() {
+    createTableWithChangelogEnabled();
+    InternalSchema schema = schemaExtractor.toInternalSchema(testTable.getPaimonTable().schema());
+
+    // Insert some data to create files
+    List<GenericRow> insertedRows = testTable.insertRows(10);
+
+    // Perform upsert to trigger changelog generation
+    // Changelog files are typically created when data is modified, not just inserted
+    testTable.upsertRows(insertedRows.subList(0, 5));
+
+    // Create source config with CHANGELOG mode
+    Properties props = new Properties();
+    props.setProperty(PaimonSourceConfig.EMIT_FILES_MODE, "CHANGELOG");
+    PaimonSourceConfig changelogConfig = PaimonSourceConfig.fromProperties(props);
+
+    List<InternalDataFile> result =
+        extractor.toInternalDataFiles(
+            paimonTable, paimonTable.snapshotManager().latestSnapshot(), schema, changelogConfig);
+
+    assertNotNull(result);
+    assertFalse(result.isEmpty(), "Changelog-enabled table should produce changelog files");
+
+    // Verify all files have changelog- prefix in their filename
+    for (InternalDataFile dataFile : result) {
+      assertNotNull(dataFile.getPhysicalPath());
+      String path = dataFile.getPhysicalPath();
+      assertTrue(
+          path.contains("changelog-"), "Expected changelog- prefix in filename but got: " + path);
+    }
+  }
+
+  @Test
+  void testToInternalDataFilesWithChangelogModePartitioned() {
+    createPartitionedTableWithChangelogEnabled();
+    InternalSchema schema = schemaExtractor.toInternalSchema(testTable.getPaimonTable().schema());
+
+    // Insert some data to create files
+    testTable.insertRows(5);
+
+    // Create source config with CHANGELOG mode
+    Properties props = new Properties();
+    props.setProperty(PaimonSourceConfig.EMIT_FILES_MODE, "CHANGELOG");
+    PaimonSourceConfig changelogConfig = PaimonSourceConfig.fromProperties(props);
+
+    List<InternalDataFile> result =
+        extractor.toInternalDataFiles(
+            paimonTable, paimonTable.snapshotManager().latestSnapshot(), schema, changelogConfig);
+
+    assertNotNull(result);
+    assertFalse(result.isEmpty(), "Changelog-enabled table should produce changelog files");
+
+    // When using CHANGELOG mode with a partitioned changelog-enabled table,
+    // verify they have changelog- prefix and partition values
+    for (InternalDataFile dataFile : result) {
+      String path = dataFile.getPhysicalPath();
+      assertNotNull(path);
+      assertTrue(
+          path.contains("changelog-"), "Expected changelog- prefix in filename but got: " + path);
+      // Verify partition values are present
+      assertNotNull(dataFile.getPartitionValues());
+    }
+  }
+
+  @Test
+  void testChangelogModeWithPrimaryKeyTable() {
+    createTableWithChangelogEnabled();
+    InternalSchema schema = schemaExtractor.toInternalSchema(testTable.getPaimonTable().schema());
+
+    // Insert initial data to first snapshot
+    testTable.insertRows(10);
+    Snapshot firstSnapshot = paimonTable.snapshotManager().latestSnapshot();
+
+    // Insert more data to create a second snapshot with changes
+    testTable.insertRows(5);
+    Snapshot secondSnapshot = paimonTable.snapshotManager().latestSnapshot();
+
+    // Create source config with CHANGELOG mode
+    Properties props = new Properties();
+    props.setProperty(PaimonSourceConfig.EMIT_FILES_MODE, "CHANGELOG");
+    PaimonSourceConfig changelogConfig = PaimonSourceConfig.fromProperties(props);
+
+    List<InternalDataFile> changelogFiles =
+        extractor.toInternalDataFiles(paimonTable, secondSnapshot, schema, changelogConfig);
+
+    assertNotNull(changelogFiles);
+    assertFalse(changelogFiles.isEmpty(), "Changelog-enabled table should produce changelog files");
+
+    // Verify all changelog files have the changelog- prefix in filename
+    for (InternalDataFile file : changelogFiles) {
+      String path = file.getPhysicalPath();
+      assertNotNull(path);
+      assertTrue(
+          path.contains("changelog-"), "Expected changelog- prefix in filename but got: " + path);
+    }
+  }
+
   private void createUnpartitionedTable() {
     testTable =
         (TestPaimonTable)
@@ -267,10 +368,26 @@ public class TestPaimonDataFileExtractor {
     paimonTable = testTable.getPaimonTable();
   }
 
-  private void createTableWithPrimaryKeys() {
+  private void createTableWithChangelogEnabled() {
+    // Create a table with changelog producer enabled
     testTable =
         (TestPaimonTable)
-            TestPaimonTable.createTable("test_table", null, tempDir, new Configuration(), false);
+            TestPaimonTable.createTable(
+                "test_table_changelog", null, tempDir, new Configuration(), false, true);
+    paimonTable = testTable.getPaimonTable();
+  }
+
+  private void createPartitionedTableWithChangelogEnabled() {
+    // Create a partitioned table with changelog producer enabled
+    testTable =
+        (TestPaimonTable)
+            TestPaimonTable.createTable(
+                "test_table_changelog_partitioned",
+                "level",
+                tempDir,
+                new Configuration(),
+                false,
+                true);
     paimonTable = testTable.getPaimonTable();
   }
 }
